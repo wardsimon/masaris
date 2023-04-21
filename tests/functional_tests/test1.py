@@ -5,6 +5,7 @@ from masaris.objects.core import Parameterized
 from masaris.objects.executors import Executor
 from masaris.objects.watchers import Watchers
 
+
 class MyTest(Parameterized):
     a = Executor(value=9)
 

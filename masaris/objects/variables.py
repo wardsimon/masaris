@@ -1,9 +1,27 @@
+
+from __future__ import annotations
+
 __author__ = "github.com/wardsimon"
 __version__ = "0.1.0"
 
+import numpy as np
+import sys
+
+from numbers import Number
+from typing import Union, Dict, Any, Tuple, Optional, Callable, TypeVar, TYPE_CHECKING, NoReturn
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    Self = TypeVar('Self', bound='Descriptor')
+
+from masaris import ureg
 from .executors import String, Numeric, LimitedNumber, Boolean, Executor
 from .core import BaseParameterized
 from .watchers import Watchers
+
+if TYPE_CHECKING:
+    from .core import E
 
 
 class Descriptor(BaseParameterized):
@@ -15,52 +33,119 @@ class Descriptor(BaseParameterized):
     display_name = String(value="", visible=False)
     enabled = Boolean(value=True, visible=False)
 
-    def __init__(self, name=None, value=None, units=None, description=None, url=None, display_name=None, enabled=None, **kwargs):
-        super().__init__(name=name, value=value, units=units, description=description, url=url, display_name=display_name, enabled=enabled, **kwargs)
-        Watchers.register(self, 'name', self._update_display_name)
-        Watchers.register(self, 'enabled', self._update_enabled_value)
+    def __init__(self, name: Optional[str] = None, value: Optional[Any] = None,
+                 units: Optional[str] = None, description: Optional[str] = None,
+                 url: Optional[str] = None, display_name: Optional[str] = None,
+                 enabled: Optional[bool] = True, **kwargs):
+        self._unit_cache = ureg(units).units
+        if not self._unit_cache.dimensionless:
+            units = str(self._unit_cache)
+        super().__init__(name=name, value=value, units=units, description=description,
+                         url=url, display_name=display_name, enabled=enabled, **kwargs)
 
-    def __reduce__(self):
+    def __copy__(self) -> Self:
+        return self.__class__.from_dict(self.as_dict())
+
+    def __reduce__(self) -> Tuple[Callable, Tuple[Dict[str, Any]]]:
         """
         Make the class picklable. Due to the nature of the dynamic class definitions special measures need to be taken.
-        :return: Tuple consisting of how to make the object
-        :rtype: tuple
+        :return: Tuple consisting of how to make the object and the arguments to make it.
         """
         state = self.encode()
         cls = getattr(self, "__old_class__", self.__class__)
         return cls.from_dict, (state,)
 
-    @property
-    def full_value(self):
-        return self.value
-
-    @full_value.setter
-    def full_value(self, value):
-        self.value = value
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Return printable representation of a Descriptor/Parameter object."""
+
         class_name = self.__class__.__name__
         obj_name = self.name
         obj_value = self.value
 
-        if isinstance(obj_value, float):
-            obj_value = "{:0.04f}".format(obj_value)
-        # obj_units = ""
-        # if not self.unit.dimensionless:
-        #     obj_units = " {:~P}".format(self.unit)
-        obj_units = self.units
+        obj_units = ""
+        if not self._unit_cache.dimensionless:
+            obj_units = " {:~P}".format(self._unit_cache)
         out_str = f"<{class_name} '{obj_name}': {obj_value}{obj_units}>"
         return out_str
 
-    @staticmethod
-    def _update_display_name(obj, name, value, extra):
-        if obj.display_name == "":
-            obj.display_name = value
+    @property
+    def full_value(self) -> ureg.Quantity:
+        return self.value * self._unit_cache
 
-    @staticmethod
-    def _update_enabled_value(obj, name, value, extra):
-        obj.pars['value'].enabled = value
+    @full_value.setter
+    def full_value(self, value: Union[Number, ureg.Quantity]) -> NoReturn:
+        old_unit = self._unit_cache
+        new_unit = None
+        if hasattr(value, "magnitude"):
+            new_unit = value.units
+            value = value.magnitude
+            if hasattr(value, "nominal_value"):
+                value = value.nominal_value
+            if str(new_unit) == str(old_unit):
+                new_unit = None
+        self.value = value
+        if new_unit is not None:
+            self._unit_cache = ureg(str(new_unit)).units
+            self.units = str(new_unit)
 
-    def __copy__(self):
-        return self.__class__.from_dict(self.as_dict())
+    @Watchers.watch(['name'])
+    def _update_display_name(self: Self, name: str, value: Any, extra: E) -> NoReturn:
+        if self.display_name == "":
+            self.display_name = value
+
+    @Watchers.watch(['value'])
+    def _update_enabled(self: Self, name: str, value: Any, extra: E) -> NoReturn:
+        self.pars[name].enabled = value
+
+    @Watchers.watch(['units'])
+    def _update_unit_cache(self: Self, name: str, value: Any, extra: E) -> NoReturn:
+        if not self._unit_cache.dimensionless:
+            old_full = self.full_value
+            new_full = old_full.to(value)
+            tmp_value = new_full.magnitude
+            if hasattr(tmp_value, "nominal_value"):
+                tmp_value = tmp_value.nominal_value
+            self.value = tmp_value
+            self._unit_cache = new_full.units
+        else:
+            self._unit_cache = ureg(value).units
+
+
+V = TypeVar("V", bound=Descriptor)
+
+
+class Parameter(Descriptor):
+    value = LimitedNumber(0)
+    error = Numeric(0, visible=False)
+    min = Numeric(-np.Inf, visible=False)
+    max = Numeric(np.Inf, visible=False)
+    fixed = Boolean(False, visible=False)
+
+    def __init__(self, name: Optional[str] = None, value: Optional[Number] = None,
+                 error: Optional[Any] = None, min: Optional[Number] = None, max: Optional[Number] = None,
+                 fixed: Optional[bool] = False, units: Optional[str] = None, description: Optional[str] = None,
+                 url: Optional[str] = None, display_name: Optional[str] = None,
+                 enabled: Optional[bool] = True, **kwargs):
+        super().__init__(name=name, value=value, error=error, min=min, max=max,
+                         fixed=fixed, units=units, description=description, url=url,
+                         display_name=display_name, enabled=enabled, **kwargs)
+        self._update_limits('min', self.min, {})
+        self._update_limits('max', self.max, {})
+
+    @Watchers.watch(['min', 'max'])
+    def _update_limits(self: Self, name: str, value: Any, extra: Dict[str, Any]) -> NoReturn:
+        if name == 'min':
+            self.pars['value'].min = value
+        elif name == 'max':
+            self.pars['value'].max = value
+
+    @property
+    def full_value(self) -> ureg.Measurement:
+        return super().full_value.plus_minus(self.error)
+
+    @full_value.setter
+    def full_value(self, value: Union[Number, ureg.Quantity, ureg.Measurement]) -> NoReturn:
+        Descriptor.full_value.fset(self, value)
+        if hasattr(value, 'error'):
+            error = value.error.magnitude
+            self.error = error

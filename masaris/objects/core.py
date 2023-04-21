@@ -8,7 +8,7 @@ __author__ = "github.com/wardsimon"
 __version__ = "0.0.1"
 
 from copy import deepcopy
-from typing import Optional, List, Dict, Any, TYPE_CHECKING, Set, Type
+from typing import Optional, List, Dict, Any, TYPE_CHECKING, TypeVar, Type, NoReturn, Union, Callable
 from hashlib import sha1
 import json
 
@@ -141,7 +141,40 @@ class ComponentSerializer:
 
 
 class ExecutorBase:
-    def __init__(self, value=None, **kwargs):
+    """
+    Base class for all executors. This class is used to define the interface for all executors.
+    This class is not intended to be used directly. Instead, use the `Executor` class which has more functionality.
+
+    The idea of this class is to provide a way to execute an arbitrary number of function when a value is set.
+    There are three types of execution:
+      - Configuration: This is something which is inherent to the Executor/ExecutorDerrived class. This is typically
+      used
+        to ensure type checking etc.
+      - Class level execution: This is something which is inherent to the class on which the executor is defined.
+      This is
+        typically used for inner class callbacks. i.e you always want something to run when changing a value in a class.
+      - Instance level execution: This is something which is inherent to the instance of the class on which the
+      executor is
+        defined. This is typically used for outer class callbacks. i.e you want something to run when changing a value
+        in something which isn't defined in the class.
+
+    """
+
+    def __init__(self, value: Optional[Any] = None,
+                 write_modifiers: Optional[List[Callable]] = None,
+                 read_modifiers: Optional[List[Callable]] = None
+                 ):
+        """
+        Initializer for the ExecutorBase class which just sets a value.
+        :param value: Any initial value to be set.
+        """
+
+        if write_modifiers is None:
+            write_modifiers = []
+        self._write_modifiers = write_modifiers
+        if read_modifiers is None:
+            read_modifiers = []
+        self._read_modifiers = read_modifiers
         self._executions = []
         self._class_executions = []
         self._configuration = []
@@ -151,43 +184,80 @@ class ExecutorBase:
         self._default_value = value
         self.name = None
         self.parent = None
-        self._kwargs = kwargs
 
     @property
-    def value(self):
+    def value(self) -> Any:
+        """
+        Internal value of the executor.
+        :return: Internal value of the executor.
+        """
+        # We run all the modifiers
+        for modifier in self._read_modifiers:
+            modifier(self.parent, self.name, self._value, extra=self)
         return self._value
 
     @value.setter
-    def value(self, value):
-        self._first = False
+    def value(self, new_value: Any) -> NoReturn:
+        """
+        Sets the value of the executor and runs all the executions.
+        :param new_value: New value to be set.
+        """
+        # The previous value, so it can be restored on error
         previous_value = self.previous_value
+        # We set the previous value to the current value
         self.previous_value = self._value
-        self._value = value
+        # We set the INTERNAL current value to the new value
+        self._value = new_value
+
+        # We run all the modifiers
+        for modifier in self._write_modifiers:
+            modifier(self.parent, self.name, new_value, extra=self)
+
+        # We run all the executions
         try:
             # First we execute everything defined in the configuration
             for config_executor in self._configuration:
-                config_executor(self.parent, self.name, value, extra=self)
+                config_executor(self.parent, self.name, new_value, extra=self)
             # Then we execute the class level executions i.e. decorators attached to the class.
             for class_executor in self._class_executions:
-                class_executor(self.parent, self.name, value, extra=self)
+                class_executor(self.parent, self.name, new_value, extra=self)
             # Finally we execute the executions attached to the instance by the user.
             for execution in self._executions:
-                execution(self.parent, self.name, value, extra=self)
+                execution(self.parent, self.name, new_value, extra=self)
         except Exception as e:
+            # If there is an error, we restore the previous value
             self._value = self.previous_value
             self.previous_value = previous_value
             raise e
+        # If we get here, we set the first flag to false
+        self._first = False
 
     @property
-    def default(self):
+    def default(self) -> bool:
+        """
+        A check to see if the Executor value has been set explicitly.
+        :return: Check to see if the Executor value has been set explicitly.
+        """
         return self._first
 
     @property
-    def default_value(self):
+    def default_value(self) -> Any:
+        """
+        The default value of the executor.
+        :return: Default value of the executor.
+        """
         return self._default_value
 
 
+# Type hinting for the ExecutorBase class and its subclasses
+E = TypeVar("E", bound=ExecutorBase)
+
+
 class BaseParameterized(ComponentSerializer):
+    """
+    Base class for all parameterized objects. This class is used to define the interface for all parameterized objects.
+    """
+
     def __init__(self, **kwargs):
         self.__params__ = {}
         for name, value in self._descriptors.items():
@@ -196,7 +266,7 @@ class BaseParameterized(ComponentSerializer):
                 if this_value is None:
                     self.__params__[name] = value
                     continue
-                self._attach_generator(name, value, this_value)
+                self._attach_generator(name, this_value)
             else:
                 self.__params__[name] = value
         if len(kwargs) > 0:
@@ -204,13 +274,14 @@ class BaseParameterized(ComponentSerializer):
                 setattr(self, key, value)
             raise Warning(f"Parameters {kwargs} not found in {self.__class__.__name__}")
 
-    def __getattribute__(self, name):
+    def __getattribute__(self, name: str) -> Any:
+        # This might have the problem that it will not work for the first time. This is due to instantiation order. Boo!
         return super().__getattribute__(name)
 
-    def __setattr__(self, key, value):
+    def __setattr__(self, key: str, value: Any) -> NoReturn:
         t_ = type(value)
         if key in self._descriptors and self._descriptors[key] == self.__params__[key]:
-            self._attach_generator(key, self._descriptors[key], value)
+            self._attach_generator(key, value)
             return
         if key not in self._descriptors and issubclass(t_, Parameterized):
             from masaris.objects.executors import Executor
@@ -218,7 +289,7 @@ class BaseParameterized(ComponentSerializer):
             raise Warning(f"Parameter {key} not found in {self.__class__.__name__}, but added")
         super().__setattr__(key, value)
 
-    def _attach_generator(self, name, executor_cls, value):
+    def _attach_generator(self, name: str, value: Any) -> NoReturn:
         executor = deepcopy(self._descriptors[name])
         executor._first = False  # Set it to be NOT the default value
         executor.parent = self
@@ -227,11 +298,11 @@ class BaseParameterized(ComponentSerializer):
         executor.value = value
 
     @property
-    def pars(self):
+    def pars(self) -> Dict[str, E]:
         return self.__params__
 
     @property
-    def parameters(self) -> List[ExecutorBase]:
+    def parameters(self) -> List[E]:
         mine = list(self.__params__.items())
         re = []
         for item in mine:
@@ -243,11 +314,15 @@ class BaseParameterized(ComponentSerializer):
         return re
 
 
+Pcls = Type[BaseParameterized]
+Pobj = TypeVar("Pobj", bound=BaseParameterized)
+
+
 class Parameterized(BaseParameterized):
 
     @property
-    def class_parameters(self):
+    def class_parameters(self) -> List[E]:
         return self._descriptors
 
-    def attachPar(self, name, par):
+    def attach_parameter(self, name: str, par: Union[Pobj, E]):
         add_par_to_class(self, name, par)
