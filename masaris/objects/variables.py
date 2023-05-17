@@ -115,11 +115,11 @@ V = TypeVar("V", bound=Descriptor)
 
 
 class Parameter(Descriptor):
-    value = LimitedNumber(0)
-    error = Numeric(0, visible=False)
-    min = Numeric(-np.Inf, visible=False)
-    max = Numeric(np.Inf, visible=False)
-    fixed = Boolean(False, visible=False)
+    value = LimitedNumber(value=0)
+    error = Numeric(value=0, visible=False)
+    min = Numeric(value=-np.Inf, visible=False)
+    max = Numeric(value=np.Inf, visible=False)
+    fixed = Boolean(value=False, visible=False)
 
     def __init__(self, name: Optional[str] = None, value: Optional[Number] = None,
                  error: Optional[Any] = None, min: Optional[Number] = None, max: Optional[Number] = None,

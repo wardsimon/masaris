@@ -209,12 +209,12 @@ class ExecutorBase:
         # We set the INTERNAL current value to the new value
         self._value = new_value
 
-        # We run all the modifiers
-        for modifier in self._write_modifiers:
-            modifier(self.parent, self.name, new_value, extra=self)
-
         # We run all the executions
         try:
+            # We run all the modifiers
+            for modifier in self._write_modifiers:
+                modifier(self.parent, self.name, new_value, extra=self)
+
             # First we execute everything defined in the configuration
             for config_executor in self._configuration:
                 config_executor(self.parent, self.name, new_value, extra=self)
@@ -228,6 +228,7 @@ class ExecutorBase:
             # If there is an error, we restore the previous value
             self._value = self.previous_value
             self.previous_value = previous_value
+            # And we raise the error
             raise e
         # If we get here, we set the first flag to false
         self._first = False
@@ -280,7 +281,7 @@ class BaseParameterized(ComponentSerializer):
 
     def __setattr__(self, key: str, value: Any) -> NoReturn:
         t_ = type(value)
-        if key in self._descriptors and self._descriptors[key] == self.__params__[key]:
+        if key in self._descriptors.keys() and self._descriptors[key] == self.__params__[key]:
             self._attach_generator(key, value)
             return
         if key not in self._descriptors and issubclass(t_, Parameterized):
@@ -290,19 +291,34 @@ class BaseParameterized(ComponentSerializer):
         super().__setattr__(key, value)
 
     def _attach_generator(self, name: str, value: Any) -> NoReturn:
+        """
+        Creates a generator from the base generator and attaches it to the object.
+        :param name: Name of the parameter. e.g `foo` would be `self.foo`
+        :param value: The value which the parameter should be set to.
+        """
         executor = deepcopy(self._descriptors[name])
         executor._first = False  # Set it to be NOT the default value
         executor.parent = self
         executor._default_value = self._descriptors[name].value
         self.__params__[name] = executor
+        if executor._value == value:
+            return
         executor.value = value
 
     @property
     def pars(self) -> Dict[str, E]:
+        """
+        Returns the parameters of this object, in a dict format.
+        :return: Dict of parameters.
+        """
         return self.__params__
 
     @property
     def parameters(self) -> List[E]:
+        """
+        Returns all parameters associated with this object and all parameters of attached objects recursively.
+        :return: List of parameters.
+        """
         mine = list(self.__params__.items())
         re = []
         for item in mine:

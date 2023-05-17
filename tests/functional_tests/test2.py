@@ -14,8 +14,11 @@ class Test(Parameterized):
 
     @Watchers.watch(variables=['a'])
     def print(self, *args, **kwargs):
-        print(f'{self.a} called from watcher')
+        print(f'{self.a} called from watcher with {args} and {kwargs}')
 
+    @Watchers.depends(variables=['a'])
+    def print2(self):
+        print(f'{self.a} called from a dependency')
 #
 # class Test2(Test):
 #     b = Integer(3)
